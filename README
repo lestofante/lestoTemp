@@ -1,0 +1,12 @@
+# lestoTemp 
+
+This project is born to provide a quick and easy way to make a WiFi temperature sensor that can live many monts on a couple of AA battery.  
+  
+ESP8622-12E is used for v1 since this is what I got home, but later revision may switch to an ESP32.  
+  
+To simplify the schematics I chose to avoid the usage of any power regulator and use direct ~3v from the battery.    
+  
+Deep sleep will be used, with poeriodic wake up (current estimate, 10min), a measurement is taken and stored;  
+to furter reduce power usage, the transmission will happer only once for day.
+  
+There will be OTA update support, and server will be minimal and self contained, probably I will use a rasperry, or maybe another ESP with and SD card.  
