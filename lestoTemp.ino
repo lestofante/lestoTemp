@@ -52,7 +52,7 @@ struct Reading{
   #define SENSOR_SELECTED 1
   #include <Adafruit_BME280.h>
   
-  constexpr int BMP_CS = 2; //cs pin
+  constexpr int BMP_CS = 10; //cs pin
   
   Adafruit_BME280 bmp(BMP_CS); //SPI
 
@@ -65,7 +65,7 @@ struct Reading{
   #define SENSOR_SELECTED 1
   #include <DHT.h>
 
-  constexpr int DHT_PIN = 12;
+  constexpr int DHT_PIN = 2;
   
   DHT dht(DHT_PIN, DHT11);
 
