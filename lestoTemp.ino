@@ -13,7 +13,7 @@ constexpr int port = 443;
 
 constexpr uint32_t SecondsPerReading = 10; //1 read every 10 seconds
 constexpr uint32_t ReadingPerTransmission = 60 * 6; //60 * 6 reading before transmission; with SecondsPerReading = 10 means transmit every hour
-
+constexpr uint32_t TimeoutConnectionMs = 15000;
 // DigiCert High Assurance EV Root CA
 const char trustRoot[] PROGMEM = R"EOF(
 -----BEGIN CERTIFICATE-----
@@ -111,11 +111,14 @@ uint16_t readBatteryRaw(){
 void transmit_readings(){
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
+
+  uint32_t connection_start = millis();
   
-  while (WiFi.status() != WL_CONNECTED) {
+  while (WiFi.status() != WL_CONNECTED && (millis() - connection_start < TimeoutConnectionMs)) {
     delay(1);
   }
-  
+
+  client.setTimeout(TimeoutConnectionMs);
   if (!client.connect(host, port)) {
     Serial.println("Connection failed");
     return;
