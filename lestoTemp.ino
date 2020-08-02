@@ -6,8 +6,8 @@
 #define USE_DHT
 //#define USE_BMP // V1.0 WILL NOT WORK, SPI IS CONNECTED WRONG
 
-constexpr char* STASSID = "your-ssid";
-constexpr char* STAPSK = "your-password";
+constexpr char* ssid = "your-ssid";
+constexpr char* password = "your-password";
 constexpr char* host = "api.github.com";
 constexpr int port = 443;
 
@@ -42,6 +42,12 @@ vEsXCS+0yx5DaMkHJ8HSXPfqIbloEpw8nL+e/IBcm2PN7EeqJSdnoDfzAIJ9VNep
 )EOF";
 ////// END USER CONFIGURATION
 
+constexpr uint8_t R2 = 33;
+constexpr uint8_t R3 = 10;
+constexpr uint8_t VoltageDividerMultiplier = R3 / (R2 + R3);
+
+static_assert(VoltageDividerMultiplier * 3.7f < 1.0f, "warning, safe voltage overshoot the ADC");
+
 struct Reading{
   float temperature;
   float humidity;
@@ -52,7 +58,7 @@ struct Reading{
   #define SENSOR_SELECTED 1
   #include <Adafruit_BME280.h>
   
-  constexpr int BMP_CS = 2; //cs pin
+  constexpr int BMP_CS = 10; //cs pin
   
   Adafruit_BME280 bmp(BMP_CS); //SPI
 
@@ -65,7 +71,7 @@ struct Reading{
   #define SENSOR_SELECTED 1
   #include <DHT.h>
 
-  constexpr int DHT_PIN = 12;
+  constexpr int DHT_PIN = 2;
   
   DHT dht(DHT_PIN, DHT11);
 
@@ -78,24 +84,50 @@ static_assert(SENSOR_SELECTED==1, "you must select a chip to use");
 
 WiFiClientSecure client;
 X509List cert(trustRoot);
+bool lowBattery{true};
 
 void setup() {
   client.setTrustAnchors(&cert);
 }
 
+uint16_t readBatteryRaw(){
+
+  //enable GPIO and MOSFET
+  pinMode(14, OUTPUT);
+  digitalWrite(14, HIGH);
+  
+  //make 2 read to flush the adc HW
+  analogRead(A0); // max input range 0-1v
+
+  uint16_t raw_voltage = analogRead(A0);
+
+  //disable the MOSFET and GPIO
+  digitalWrite(14, LOW);
+  pinMode(14, INPUT);
+  
+  return raw_voltage;
+}
+
 void transmit_readings(){
-  //TSL
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1);
+  }
+  
   if (!client.connect(host, port)) {
     Serial.println("Connection failed");
     return;
   }
+  
+  float battery = (readBatteryRaw() * VoltageDividerMultiplier) / 1024.0f;
+  client.write(reinterpret_cast<const uint8_t*>(&battery), sizeof(battery));
+  
   for (Reading &r : bufferReadings){
-    if (!client.available()){
-      Serial.println("Connection failed");
-      return;
-    }
     client.write(reinterpret_cast<const uint8_t*>(&r), sizeof(r));
   }
+  client.stop();
 }
 
 void loop() {
