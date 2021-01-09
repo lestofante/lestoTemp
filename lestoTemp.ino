@@ -1,46 +1,29 @@
-#include <SPI.h>
-#include <ESP8266WiFi.h>
-#include <WiFiClientSecure.h>
+#ifdef ESP32
+  #include <WiFi.h>
+#else
+  #include <ESP8266WiFi.h>
+#endif
+
+#include <ESPmDNS.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
 
 ////// USER CONFIGURATION
 #define USE_DHT
-//#define USE_BMP // V1.0 WILL NOT WORK, SPI IS CONNECTED WRONG
+//#define USE_BMP // lestoTemp V1.0 WILL NOT WORK, SPI IS CONNECTED WRONG
 
-constexpr char* ssid = "your-ssid";
-constexpr char* password = "your-password";
-constexpr char* host = "api.github.com";
-constexpr int port = 443;
+constexpr char* ssid = "XXXX";
+constexpr char* password = "XXXX";
+constexpr char* host = "XXX.XXX.XXX.XXX";
+constexpr int port = 4444;
 
-constexpr uint32_t SecondsPerReading = 10; //1 read every 10 seconds
-constexpr uint32_t ReadingPerTransmission = 60 * 6; //60 * 6 reading before transmission; with SecondsPerReading = 10 means transmit every hour
-constexpr uint32_t TimeoutConnectionMs = 15000;
-// DigiCert High Assurance EV Root CA
-const char trustRoot[] PROGMEM = R"EOF(
------BEGIN CERTIFICATE-----
-MIIDxTCCAq2gAwIBAgIQAqxcJmoLQJuPC3nyrkYldzANBgkqhkiG9w0BAQUFADBs
-MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
-d3cuZGlnaWNlcnQuY29tMSswKQYDVQQDEyJEaWdpQ2VydCBIaWdoIEFzc3VyYW5j
-ZSBFViBSb290IENBMB4XDTA2MTExMDAwMDAwMFoXDTMxMTExMDAwMDAwMFowbDEL
-MAkGA1UEBhMCVVMxFTATBgNVBAoTDERpZ2lDZXJ0IEluYzEZMBcGA1UECxMQd3d3
-LmRpZ2ljZXJ0LmNvbTErMCkGA1UEAxMiRGlnaUNlcnQgSGlnaCBBc3N1cmFuY2Ug
-RVYgUm9vdCBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMbM5XPm
-+9S75S0tMqbf5YE/yc0lSbZxKsPVlDRnogocsF9ppkCxxLeyj9CYpKlBWTrT3JTW
-PNt0OKRKzE0lgvdKpVMSOO7zSW1xkX5jtqumX8OkhPhPYlG++MXs2ziS4wblCJEM
-xChBVfvLWokVfnHoNb9Ncgk9vjo4UFt3MRuNs8ckRZqnrG0AFFoEt7oT61EKmEFB
-Ik5lYYeBQVCmeVyJ3hlKV9Uu5l0cUyx+mM0aBhakaHPQNAQTXKFx01p8VdteZOE3
-hzBWBOURtCmAEvF5OYiiAhF8J2a3iLd48soKqDirCmTCv2ZdlYTBoSUeh10aUAsg
-EsxBu24LUTi4S8sCAwEAAaNjMGEwDgYDVR0PAQH/BAQDAgGGMA8GA1UdEwEB/wQF
-MAMBAf8wHQYDVR0OBBYEFLE+w2kD+L9HAdSYJhoIAu9jZCvDMB8GA1UdIwQYMBaA
-FLE+w2kD+L9HAdSYJhoIAu9jZCvDMA0GCSqGSIb3DQEBBQUAA4IBAQAcGgaX3Nec
-nzyIZgYIVyHbIUf4KmeqvxgydkAQV8GK83rZEWWONfqe/EW1ntlMMUu4kehDLI6z
-eM7b41N5cdblIZQB2lWHmiRk9opmzN6cN82oNLFpmyPInngiK3BD41VHMWEZ71jF
-hS9OMPagMRYjyOfiZRYzy78aG6A9+MpeizGLYAiJLQwGXFK3xPkKmNEVX58Svnw2
-Yzi9RKR/5CYrCsSXaQ3pjOLAEFe4yHYSkVXySGnYvCoCWw9E1CAx2/S6cCZdkGCe
-vEsXCS+0yx5DaMkHJ8HSXPfqIbloEpw8nL+e/IBcm2PN7EeqJSdnoDfzAIJ9VNep
-+OkuE6N36B9K
------END CERTIFICATE-----
-)EOF";
+constexpr uint64_t SecondsPerReading = 60; //1 read every 60 seconds
+constexpr uint32_t ReadingPerTransmission = 60; //60 reading before transmission; with SecondsPerReading = 60 means transmit every hour
+constexpr uint32_t ReadingBufferMultiplier = 3; // how many times the buffer has to be bigger. This is basically the number of consecutive failed upload before loosing data
+constexpr uint32_t TimeoutConnectionMs = 5000;
 ////// END USER CONFIGURATION
+
+constexpr uint32_t uS_TO_S_FACTOR = 1000000;
 
 constexpr uint8_t R2 = 33;
 constexpr uint8_t R3 = 10;
@@ -48,46 +31,33 @@ constexpr uint8_t VoltageDividerMultiplier = R3 / (R2 + R3);
 
 static_assert(VoltageDividerMultiplier * 3.7f < 1.0f, "warning, safe voltage overshoot the ADC");
 
-struct Reading{
+
+constexpr uint32_t READING_BUFFER_SIZE = ReadingPerTransmission * ReadingBufferMultiplier;
+RTC_DATA_ATTR struct Reading{
+  uint32_t timestamp_seconds;
   float temperature;
   float humidity;
   float pressure;
-}bufferReadings[ReadingPerTransmission];
+}bufferReadings[READING_BUFFER_SIZE];
 
 #ifdef USE_BMP
-  #define SENSOR_SELECTED 1
-  #include <Adafruit_BME280.h>
-  
-  constexpr int BMP_CS = 10; //cs pin
-  
-  Adafruit_BME280 bmp(BMP_CS); //SPI
-
-  Reading read_sensor(){
-    return {bmp.readTemperature(), bmp.readHumidity(), bmp.readPressure() / 100.0F};
-  }
+  #include "bmp.h"
 #endif
 
 #ifdef USE_DHT
-  #define SENSOR_SELECTED 1
-  #include <DHT.h>
-
-  constexpr int DHT_PIN = 2;
-  
-  DHT dht(DHT_PIN, DHT11);
-
-  Reading read_sensor(){
-    return {dht.readTemperature(), dht.readHumidity(), 0};
-  }
+  #include "dht.h"
 #endif
 
 static_assert(SENSOR_SELECTED==1, "you must select a chip to use");
 
-WiFiClientSecure client;
-X509List cert(trustRoot);
-bool lowBattery{true};
 
-void setup() {
-  client.setTrustAnchors(&cert);
+void deep_sleep_timed(bool enableWifiNextBoot){
+#ifdef ESP32
+  esp_deep_sleep_start();
+#else
+  pinMode(16, WAKEUP_PULLUP);
+  ESP.deepSleep(SecondsPerReading * 1000 * 1000, enableWifiNextBoot ? WAKE_RF_DEFAULT : WAKE_RF_DISABLED);
+#endif
 }
 
 uint16_t readBatteryRaw(){
@@ -108,44 +78,75 @@ uint16_t readBatteryRaw(){
   return raw_voltage;
 }
 
-void transmit_readings(){
+bool transmit_readings(uint8_t numbers){
+
+  bool transmitted = false;
+  
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
-
-  uint32_t connection_start = millis();
+  const uint32_t connection_start = millis();
   
   while (WiFi.status() != WL_CONNECTED && (millis() - connection_start < TimeoutConnectionMs)) {
     delay(1);
   }
 
-  client.setTimeout(TimeoutConnectionMs);
-  if (!client.connect(host, port)) {
-    Serial.println("Connection failed");
-    return;
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClient tcpClient;
+    tcpClient.setTimeout(TimeoutConnectionMs);
+    
+    if (tcpClient.connect(host, port)) {
+      const float battery = 0;//(readBatteryRaw() * VoltageDividerMultiplier) / 1024.0f;
+      tcpClient.write(reinterpret_cast<const uint8_t*>(&battery), sizeof(battery));
+    
+      tcpClient.write(reinterpret_cast<const uint8_t*>(bufferReadings), sizeof(struct Reading) * numbers);
+
+      transmitted = true;
+    }
   }
   
-  float battery = (readBatteryRaw() * VoltageDividerMultiplier) / 1024.0f;
-  client.write(reinterpret_cast<const uint8_t*>(&battery), sizeof(battery));
-  
-  for (Reading &r : bufferReadings){
-    client.write(reinterpret_cast<const uint8_t*>(&r), sizeof(r));
-  }
-  client.stop();
+  WiFi.disconnect();
+
+  return transmitted;
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Wait for serial to initialize.
+  while(!Serial) { }
+
+  Serial.println("STARTED");
+
+#ifdef ESP32
+  /*
+  First we configure the wake up source
+  We set our ESP32 to wake up every 5 seconds
+  */
+  esp_sleep_enable_timer_wakeup(SecondsPerReading * uS_TO_S_FACTOR);
+#endif
 }
 
 void loop() {
-  static uint32_t counter {0};
+  RTC_DATA_ATTR static uint32_t counter {0};
   
   //make a read
-  bufferReadings[counter++] = read_sensor();
+  Reading r = read_sensor();
+  bufferReadings[counter % READING_BUFFER_SIZE] = r;
+  Serial.print("readed: ");
+  Serial.print(r.temperature);
+  Serial.print(" ");
+  Serial.println(r.humidity);
   
-  if (counter >= ReadingPerTransmission){
+  counter++;
+
+  if ( (counter % READING_BUFFER_SIZE) == 0){
     // time to transmit thereading and reset the loop counter
-    counter = 0;
-    transmit_readings();
+    Serial.println("sending data");
+    if ( transmit_readings(counter) )
+      counter = 0; //reset the counter only if sucessful
   }
-  
+
   bool enableWifiNextBoot = (counter + 1 >= ReadingPerTransmission);
-  ESP.deepSleep(SecondsPerReading * 1000, enableWifiNextBoot ? WAKE_RF_DEFAULT : WAKE_RF_DISABLED);
-  
+  //deep_sleep_timed(enableWifiNextBoot);
+  delay(2000);
 } 
